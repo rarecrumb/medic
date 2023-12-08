@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 // Create a struct for your JSON payload
@@ -51,6 +54,7 @@ type Block struct {
 	Uncles           []string `json:"uncles"`
 }
 
+var logger *zap.Logger
 var isNodeHealthy bool
 
 // getLatestBlock fetches the latest block information from the Ethereum node
@@ -66,12 +70,20 @@ func getLatestBlock(nodeURL string) (Block, error) {
 	// Marshal the payload to JSON
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
+		logger.Error("Failed to marshal block payload",
+			// Structured context as strongly typed fields
+			zap.Error(err),
+		)
 		return Block{}, err
 	}
 
 	// Create a new POST request with the payload
 	req, err := http.NewRequest("POST", nodeURL, bytes.NewBuffer(payloadBytes))
 	if err != nil {
+		logger.Error("Failed to query Ethereum node",
+			// Structured context as strongly typed fields
+			zap.Error(err),
+		)
 		return Block{}, err
 	}
 
@@ -82,6 +94,10 @@ func getLatestBlock(nodeURL string) (Block, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
+		logger.Error("Failed to query Ethereum node",
+			// Structured context as strongly typed fields
+			zap.Error(err),
+		)
 		return Block{}, err
 	}
 	defer resp.Body.Close()
@@ -106,7 +122,7 @@ func checkNodeHealth(clientURL string) bool {
 	// Fetch the latest block information (assuming you have a function for this)
 	latestBlock, err := getLatestBlock(clientURL)
 	if err != nil {
-		log.Println("Error getting latest block:", err)
+		log.Error().Err(err).Msg("Error getting latest block")
 		return false
 	}
 
@@ -114,12 +130,13 @@ func checkNodeHealth(clientURL string) bool {
 	blockTimeHex := latestBlock.Timestamp
 	blockTimeSec, err := strconv.ParseInt(blockTimeHex, 0, 64)
 	if err != nil {
-		log.Println("Error parsing block timestamp:", err)
+		log.Error().Err(err).Msg("Error parsing block timestamp")
 		return false
 	}
 
 	// Convert Ethereum block time from seconds to a time.Time object
 	blockTime := time.Unix(blockTimeSec, 0)
+	log.Info().Msgf("Block time: %d", blockTime.Unix())
 
 	// Get the current time
 	currentTime := time.Now()
@@ -127,10 +144,11 @@ func checkNodeHealth(clientURL string) bool {
 	// Compare block time with the current time
 	maxSecondsBehind := viper.GetInt("max-seconds-behind")
 	if currentTime.Sub(blockTime).Seconds() > float64(maxSecondsBehind) {
-		log.Println("ERROR: Node is too far behind")
+		log.Error().Msg("Node is too far behind")
 		return false
 	}
 
+	log.Info().Msgf("Block time delta: %d seconds", int(currentTime.Sub(blockTime).Seconds()))
 	return true
 }
 
@@ -157,12 +175,20 @@ func init() {
 
 	err := viper.ReadInConfig() // Find and read the config file
 	if err != nil {             // Handle errors reading the config file
-		log.Printf("No config file found or error reading it: %s\n", err)
+		log.Error().Err(err).Msg("No config file found or error reading it")
 	}
+
 	viper.AutomaticEnv()
+	// Setup logger
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	log.Info().Msg("Service initialized")
 }
 
 func main() {
 	http.HandleFunc("/ready", readinessHandler)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatal().Err(err).Msg("Failed to start the server")
+		os.Exit(1) // Exit the program after logging the fatal error
+	}
+	defer logger.Sync()
 }
