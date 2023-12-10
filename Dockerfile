@@ -20,5 +20,7 @@ FROM gcr.io/distroless/base-debian11
 # Copy the binary from the builder stage
 COPY --from=builder /app/medic /
 
+EXPOSE 8080
+
 # Command to run
 ENTRYPOINT ["/medic"]
