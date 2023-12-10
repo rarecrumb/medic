@@ -2,59 +2,32 @@ package clients
 
 import (
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
-
-	"github.com/rs/zerolog/log"
 )
 
 type NethermindHealth struct {
-	Status        string `json:"status"`
-	TotalDuration string `json:"totalDuration"`
-	Entries       struct {
+	Status  string `json:"status"`
+	Entries struct {
 		NodeHealth struct {
 			Data struct {
-				IsSyncing bool     `json:"IsSyncing"`
-				Errors    []string `json:"Errors"`
+				IsSyncing bool `json:"IsSyncing"`
+				Peers     int  `json:"Peers"`
 			} `json:"data"`
-			Description string `json:"description"`
-			Duration    string `json:"duration"`
-			Status      string `json:"status"`
 		} `json:"node-health"`
 	} `json:"entries"`
 }
 
-func CheckNethermindHealth(url string) (bool, error) {
-	// Construct the full URL
-	fullURL := fmt.Sprintf("%s/health", url)
-
-	// Make the HTTP GET request
-	resp, err := http.Get(fullURL)
+func NethermindHealthCheck(url string) (*NethermindHealth, error) {
+	resp, err := http.Get(url + "/health")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	// Read the response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to read the health response")
-		return false, err
-	}
-
-	// Unmarshal the JSON response
 	var health NethermindHealth
-	err = json.Unmarshal(body, &health)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to unmarshal the health response")
-		return false, err
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		return nil, err
 	}
 
-	// Evaluate the health status
-	if health.Status == "Healthy" && !health.Entries.NodeHealth.Data.IsSyncing && len(health.Entries.NodeHealth.Data.Errors) == 0 {
-		return true, nil
-	}
-
-	return false, fmt.Errorf("Nethermind node is not healthy: %+v", health)
+	return &health, nil
 }
