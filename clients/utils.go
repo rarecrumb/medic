@@ -15,19 +15,8 @@ type RPCResponse struct {
 	ID      int    `json:"id"`
 }
 
-type SyncChecker interface {
-	CheckSyncStatus() (*SyncStatus, error)
-}
-
-type SyncStatus struct {
-	IsSyncing     bool
-	StartingBlock *uint64
-	CurrentBlock  *uint64
-	HighestBlock  *uint64
-}
-
 // DetectClientType determines the type of Ethereum client by calling web3_clientVersion
-func DetectClientType(nodeURL string) (string, error) {
+func DetectClientType(url string) (string, error) {
 	// JSON-RPC request payload
 	payload := map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -41,7 +30,7 @@ func DetectClientType(nodeURL string) (string, error) {
 	}
 
 	// Send the request
-	resp, err := http.Post(nodeURL, "application/json", bytes.NewBuffer(payloadBytes))
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return "", err
 	}
@@ -59,14 +48,10 @@ func DetectClientType(nodeURL string) (string, error) {
 	}
 
 	// Determine the client type
-	switch {
-	case strings.Contains(rpcResponse.Result, "Nethermind"):
+	if strings.Contains(rpcResponse.Result, "Nethermind") {
 		return "Nethermind", nil
-	case strings.Contains(rpcResponse.Result, "erigon"):
-		return "Erigon", nil
-	case strings.Contains(rpcResponse.Result, "reth"):
-		return "Reth", nil
-	default:
-		return "Unknown", nil
 	}
+	// Add additional client checks as needed
+
+	return "Unknown", nil
 }

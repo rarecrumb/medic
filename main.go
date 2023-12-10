@@ -38,25 +38,27 @@ func main() {
 }
 
 func readinessHandler(w http.ResponseWriter, r *http.Request) {
-	clientURL := viper.GetString("eth-url")
-	if checkNodeHealth(clientURL) {
+	url := viper.GetString("eth-url")
+	if nodeHealth(url) {
 		w.WriteHeader(http.StatusOK)
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 }
 
-func checkBlockDelta(clientURL string) bool {
+func blockDelta(url string) (uint64, error) {
 	// Connect to the Ethereum client
-	client, err := ethclient.Dial(clientURL)
+	client, err := ethclient.Dial(url)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to the Ethereum client")
+		return 0, err
 	}
 
 	// Get the latest block
 	blockNumber, err := client.BlockByNumber(context.Background(), nil)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to retrieve the latest block")
+		return 0, err
 	}
 
 	// Get the block timestamps
@@ -71,23 +73,25 @@ func checkBlockDelta(clientURL string) bool {
 	// Compare the timestamps
 	if delta > float64(maxSecondsBehind) {
 		log.Error().Msgf("Node is too far behind: %f", delta)
-		return false
+		return uint64(delta), err
 	}
 
-	return true
+	return uint64(delta), nil
 }
 
-func checkNodePeers(clientURL string) bool {
+func checkNodePeers(url string) (uint64, error) {
 	// Connect to the Ethereum client
-	client, err := ethclient.Dial(clientURL)
+	client, err := ethclient.Dial(url)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to connect to the Ethereum client")
+		return 0, err
 	}
 
 	// Get the number of peers
 	peerCount, err := client.PeerCount(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to retrieve the number of peers")
+		return 0, err
 	}
 
 	// Get the min-peers value
@@ -95,38 +99,55 @@ func checkNodePeers(clientURL string) bool {
 
 	// Compare the number of peers
 	if peerCount < minPeers {
+		return peerCount, err
+	}
+
+	return peerCount, nil
+}
+
+func nodeHealth(url string) bool {
+	// Check the block timestamp
+	blockDelta, err := blockDelta(url)
+	if err != nil {
+		log.Error().Err(err).Msgf("Failed health check by block time delta. Peers: %d", blockDelta)
 		return false
 	}
 
-	return true
-}
-
-func checkNodeHealth(clientURL string) bool {
-	var isNodeHealthy bool
-	var isClientHealthy bool
-	clientType, err := clients.DetectClientType(clientURL)
+	// Check the number of peers
+	peerCount, err := checkNodePeers(url)
 	if err != nil {
-		log.Error().Err(err).Msg("Error detecting client type")
+		log.Error().Err(err).Msgf("Failed health check by peer count. Peers: %d", peerCount)
+		return false
 	}
 
-	switch clientType {
+	// Nethermind health check
+	clientType, err := clients.DetectClientType(viper.GetString("eth-url"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to detect the client type")
+		os.Exit(1) // Exit the program after logging the fatal error
+	}
+	if clientType != "Nethermind" {
+		log.Info().
+			Int("peers", int(peerCount)).
+			Int("block_delta", int(blockDelta)).
+			Msg("OK")
 
-	case "Nethermind":
-		// Call the Nethermind-specific health check function
-		isClientHealthy, err = clients.CheckNethermindHealth(clientURL)
+		return peerCount >= uint64(viper.GetInt("min-peers")) &&
+			blockDelta <= uint64(viper.GetInt("max-seconds-behind"))
+	} else {
+		health, err := clients.NethermindHealthCheck(url)
 		if err != nil {
-			log.Error().Err(err).Msg("Nethermind health check failed")
+			log.Error().Err(err).Msg("Failed to retrieve the Nethermind health")
+			return false
 		}
-		if !isClientHealthy {
-			log.Error().Msg("Nethermind node is not healthy")
-		}
-
-	case "Erigon":
-		isClientHealthy = true
-
-	default:
-		isClientHealthy = true
+		log.Info().
+			Bool("syncing", health.Entries.NodeHealth.Data.IsSyncing).
+			Int("peers", int(peerCount)).
+			Int("block_delta", int(blockDelta)).
+			Msg("OK")
+		return !health.Entries.NodeHealth.Data.IsSyncing &&
+			health.Entries.NodeHealth.Data.Peers >= viper.GetInt("min-peers") &&
+			peerCount >= uint64(viper.GetInt("min-peers")) &&
+			blockDelta <= uint64(viper.GetInt("max-seconds-behind"))
 	}
-	isNodeHealthy = isClientHealthy && checkBlockDelta(clientURL) && checkNodePeers(clientURL)
-	return isNodeHealthy
 }
