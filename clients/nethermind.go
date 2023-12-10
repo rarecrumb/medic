@@ -10,8 +10,8 @@ type NethermindHealth struct {
 	Entries struct {
 		NodeHealth struct {
 			Data struct {
-				IsSyncing bool `json:"IsSyncing"`
-				Peers     int  `json:"Peers"`
+				Errors    []string `json:"Errors"`
+				IsSyncing bool     `json:"IsSyncing"`
 			} `json:"data"`
 		} `json:"node-health"`
 	} `json:"entries"`

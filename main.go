@@ -106,25 +106,33 @@ func checkNodePeers(url string) (uint64, error) {
 }
 
 func nodeHealth(url string) bool {
+	var isNodeHealthy bool
 	// Check the block timestamp
 	blockDelta, err := blockDelta(url)
 	if err != nil {
-		log.Error().Err(err).Msgf("Failed health check by block time delta. Peers: %d", blockDelta)
+		log.Error().
+			Err(err).
+			Int("block_delta", int(blockDelta)).
+			Msg("Failed health check by block time delta")
+
 		return false
 	}
 
 	// Check the number of peers
 	peerCount, err := checkNodePeers(url)
 	if err != nil {
-		log.Error().Err(err).Msgf("Failed health check by peer count. Peers: %d", peerCount)
+		log.Error().
+			Err(err).
+			Int("peers", int(peerCount)).
+			Msg("Failed health check by peer count")
+
 		return false
 	}
 
 	// Nethermind health check
 	clientType, err := clients.DetectClientType(viper.GetString("eth-url"))
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to detect the client type")
-		os.Exit(1) // Exit the program after logging the fatal error
+		log.Info().Err(err).Msg("Failed to detect the client type")
 	}
 	if clientType != "Nethermind" {
 		log.Info().
@@ -132,12 +140,22 @@ func nodeHealth(url string) bool {
 			Int("block_delta", int(blockDelta)).
 			Msg("OK")
 
-		return peerCount >= uint64(viper.GetInt("min-peers")) &&
+		isNodeHealthy = peerCount >= uint64(viper.GetInt("min-peers")) &&
 			blockDelta <= uint64(viper.GetInt("max-seconds-behind"))
-	} else {
+
+		return isNodeHealthy
+	} else if clientType == "Nethermind" {
 		health, err := clients.NethermindHealthCheck(url)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to retrieve the Nethermind health")
+			return false
+		}
+		if len(health.Entries.NodeHealth.Data.Errors) != 0 {
+			log.Error().Msgf("Node health errors: %v", health.Entries.NodeHealth.Data.Errors)
+			return false
+		}
+		if health.Entries.NodeHealth.Data.IsSyncing {
+			log.Error().Msg("Node is syncing")
 			return false
 		}
 		log.Info().
@@ -145,9 +163,12 @@ func nodeHealth(url string) bool {
 			Int("peers", int(peerCount)).
 			Int("block_delta", int(blockDelta)).
 			Msg("OK")
-		return !health.Entries.NodeHealth.Data.IsSyncing &&
-			health.Entries.NodeHealth.Data.Peers >= viper.GetInt("min-peers") &&
+
+		isNodeHealthy = !health.Entries.NodeHealth.Data.IsSyncing &&
 			peerCount >= uint64(viper.GetInt("min-peers")) &&
 			blockDelta <= uint64(viper.GetInt("max-seconds-behind"))
+
+		return isNodeHealthy
 	}
+	return false
 }
