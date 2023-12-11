@@ -4,6 +4,7 @@ go 1.21.5
 
 require (
 	github.com/ethereum/go-ethereum v1.13.5
+	github.com/hashicorp/go-retryablehttp v0.7.4
 	github.com/rs/zerolog v1.31.0
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.18.1
@@ -24,11 +25,12 @@ require (
 	github.com/go-ole/go-ole v1.2.5 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
+	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/holiman/uint256 v1.2.3 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.19 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
