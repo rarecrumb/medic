@@ -7,20 +7,19 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/rarecrumb/medic/clients"
-	"github.com/rs/zerolog"
+
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
 func init() {
-	// Setup logger
-	log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
-
 	// Set default values
+	pflag.String("log-level", "info", "Log level")
 	pflag.String("eth-url", "http://localhost:8545", "URL of the Ethereum client")
-	pflag.Int("max-seconds-behind", 60, "Maximum number of seconds behind a block can be")
+	pflag.Int("max-seconds-behind", 30, "Maximum number of seconds behind a block can be")
 	pflag.Int("min-peers", 3, "Minimum number of peers the node should have")
 	pflag.Parse()
 	viper.BindPFlags(pflag.CommandLine)
@@ -30,6 +29,25 @@ func init() {
 }
 
 func main() {
+	url := viper.GetString("eth-url")
+	retryClient := retryablehttp.NewClient()
+	retryClient.Logger = nil
+	retryClient.RetryMax = 50
+	retryClient.RetryWaitMin = 5 * time.Second
+	retryClient.RetryWaitMax = 15 * time.Second
+
+	// Making a lightweight request to check node readiness
+	req, err := retryablehttp.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create a new request")
+	}
+
+	resp, err := retryClient.Do(req)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to perform a new request")
+	}
+	defer resp.Body.Close()
+
 	http.HandleFunc("/ready", readinessHandler)
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatal().Err(err).Msg("Failed to start the server")
@@ -42,11 +60,12 @@ func readinessHandler(w http.ResponseWriter, r *http.Request) {
 	if nodeHealth(url) {
 		w.WriteHeader(http.StatusOK)
 	} else {
+		log.Warn().Msg("Node is not healthy")
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 }
 
-func blockDelta(url string) (uint64, error) {
+func blockDelta(url string) (int, error) {
 	// Connect to the Ethereum client
 	client, err := ethclient.Dial(url)
 	if err != nil {
@@ -73,13 +92,13 @@ func blockDelta(url string) (uint64, error) {
 	// Compare the timestamps
 	if delta > float64(maxSecondsBehind) {
 		log.Error().Msgf("Node is too far behind: %f", delta)
-		return uint64(delta), err
+		return int(delta), err
 	}
 
-	return uint64(delta), nil
+	return int(delta), nil
 }
 
-func checkNodePeers(url string) (uint64, error) {
+func checkNodePeers(url string) (int, error) {
 	// Connect to the Ethereum client
 	client, err := ethclient.Dial(url)
 	if err != nil {
@@ -89,23 +108,25 @@ func checkNodePeers(url string) (uint64, error) {
 
 	// Get the number of peers
 	peerCount, err := client.PeerCount(context.Background())
+	count := int(peerCount)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to retrieve the number of peers")
 		return 0, err
 	}
 
 	// Get the min-peers value
-	minPeers := viper.GetUint64("min-peers")
+	minPeers := viper.GetInt("min-peers")
 
 	// Compare the number of peers
-	if peerCount < minPeers {
-		return peerCount, err
+	if count < minPeers {
+		return count, err
 	}
 
-	return peerCount, nil
+	return count, nil
 }
 
 func nodeHealth(url string) bool {
+
 	var isNodeHealthy bool
 	// Check the block timestamp
 	blockDelta, err := blockDelta(url)
@@ -123,7 +144,7 @@ func nodeHealth(url string) bool {
 	if err != nil {
 		log.Error().
 			Err(err).
-			Int("peers", int(peerCount)).
+			Int("peers", peerCount).
 			Msg("Failed health check by peer count")
 
 		return false
@@ -135,13 +156,15 @@ func nodeHealth(url string) bool {
 		log.Info().Err(err).Msg("Failed to detect the client type")
 	}
 	if clientType != "Nethermind" {
-		log.Info().
-			Int("peers", int(peerCount)).
-			Int("block_delta", int(blockDelta)).
-			Msg("OK")
+		isNodeHealthy = peerCount >= viper.GetInt("min-peers") &&
+			blockDelta <= viper.GetInt("max-seconds-behind")
 
-		isNodeHealthy = peerCount >= uint64(viper.GetInt("min-peers")) &&
-			blockDelta <= uint64(viper.GetInt("max-seconds-behind"))
+		log.Info().
+			Bool("is_node_healthy", isNodeHealthy).
+			Int("peer_count", peerCount).
+			Int("block_delta", int(blockDelta)).
+			Str("client_type", clientType).
+			Msg("Node health check")
 
 		return isNodeHealthy
 	} else if clientType == "Nethermind" {
@@ -158,15 +181,17 @@ func nodeHealth(url string) bool {
 			log.Error().Msg("Node is syncing")
 			return false
 		}
-		log.Info().
-			Bool("syncing", health.Entries.NodeHealth.Data.IsSyncing).
-			Int("peers", int(peerCount)).
-			Int("block_delta", int(blockDelta)).
-			Msg("OK")
-
 		isNodeHealthy = !health.Entries.NodeHealth.Data.IsSyncing &&
-			peerCount >= uint64(viper.GetInt("min-peers")) &&
-			blockDelta <= uint64(viper.GetInt("max-seconds-behind"))
+			peerCount >= viper.GetInt("min-peers") &&
+			blockDelta <= viper.GetInt("max-seconds-behind")
+
+		log.Info().
+			Bool("is_node_healthy", isNodeHealthy).
+			Bool("is_syncing", health.Entries.NodeHealth.Data.IsSyncing).
+			Int("peer_count", peerCount).
+			Int("block_delta", int(blockDelta)).
+			Str("client_type", clientType).
+			Msg("Node health check")
 
 		return isNodeHealthy
 	}
